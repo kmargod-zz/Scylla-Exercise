@@ -1,0 +1,297 @@
+I - Conclude the exercise on docker first
+II - Execute the same process into GCP nodes (Adam and I will provide the nodes with just OS)
+
+Take notes during the process
+Include in to notes, the issues you faced
+Include in to notes, the results you got
+Provide a daily report of progress, to allow we help with your issues and questions
+Use this doc, with a session for each of you to concentrate notes
+
+
+1 - Create a 3 nodes cluster, with one datacenter each of the nodes in a different rack , dc:north, racks north1, north2, north3
+
+2 - Create a keyspace with 3 tables, one of the tables using STCS, another LCS, another TWCS.
+
+3 - Insert 10,000 records in each of the tables, using loop and cqlsh.
+
+4 - In the TWCS table, when creating the table and inserting data use time-window 30 minutes and the data to expire with 1 hour TTL
+.
+5 - Add a DC with 3 more nodes , each of the nodes in a different rack, dc: south, racks south1, south2, south3
+
+6 - Install Scylla Manager
+
+7 - Run repair using Scylla manager
+
+8 - Decommission the old DC, keeping only the new created DC
+
+9 - Add a node, decommission a node
+
+10 - Then kill one of the nodes, destroy one of the containers (kill the seed node)
+
+11 - Replace procedure to replace this node we've killed
+
+-> Don't forget to monitor for Scylla Cluster and Scylla Manager
+
+
+
+1 - Create a 3 nodes cluster, with one datacenter each of the nodes in a different rack , dc:north, racks north1, north2, north3
+
+
+[root@059b6addb818 /]# nodetool status
+Using /etc/scylla/scylla.yaml as the config file
+Datacenter: north
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.3  ?          256          ?       2096bf98-00dd-4e19-9da8-c0d4014b180f  north2
+UN  172.17.0.2  ?          256          ?       f76fe9d2-2ebb-43e9-bf1e-6f5d1851ece7  north1
+UN  172.17.0.4  0 bytes    256          ?       736f7a74-5ffc-4535-b2a4-87240ed1d0af  north3
+
+
+2 - Create a keyspace with 3 tables, one of the tables using STCS, another LCS, another TWCS.
+
+
+CREATE TABLE customers_stcs (
+    id int,
+    name text,
+    doc int,
+    end text,
+    PRIMARY KEY (id, doc)
+) WITH compaction = { 'class' : 'SizeTieredCompactionStrategy' };
+
+
+CREATE TABLE timeline_lcs (
+     userid int,
+     posted_month int,
+     posted_time int,
+     body text,
+     posted_by text,
+     PRIMARY KEY (userid, posted_month, posted_time)
+ ) WITH compaction = { 'class' : 'LeveledCompactionStrategy' };
+  
+
+CREATE TABLE users_picture_twcs (
+     userid int,
+     pictureid int,
+     body text,
+     posted_by text,
+     PRIMARY KEY (userid, pictureid, posted_by)
+ ) WITH compaction = { 'class' : 'TimeWindowCompactionStrategy',
+ 	AND  default_time_to_live' : '360'
+ 	}; 
+
+
+3 - Insert 10,000 records in each of the tables, using loop and cqlsh.
+
+
+for i in $(seq 1 1 10000); do echo "INSERT INTO keyspace1.customers_stcs (id, doc, end, name) VALUES ($i, $i, 'c', 'b') ;" ; done | cqlsh $(hostname -I) 
+ 
+cqlsh> select count(*) from keyspace1.customers_stcs ;
+
+ count
+-------
+ 10000
+
+ 
+for i in $(seq 1 1 10000); do echo "INSERT INTO keyspace1.timeline_lcs (userid, posted_month, posted_time, body, posted_by) VALUES ($i, $i, 1, 'a', 'a'); " ; done | cqlsh $(hostname -I) 
+
+cqlsh> select count(*) from keyspace1.timeline_lcs ;
+
+ count
+-------
+ 10000
+
+
+4 - In the TWCS table, when creating the table and inserting data use time-window 30 minutes and the data to expire with 1 hour TTL
+
+
+for i in $(seq 1 1 10000); do echo "INSERT INTO keyspace1.users_picture_twcs (userid, pictureid, posted_by, body) VALUES ($i, $i, 'a', 'a') USING TTL 1800;  " ; done | cqlsh $(hostname -I)
+
+
+cqlsh> select count(*) from keyspace1.users_picture_twcs ;
+
+ count
+-------
+ 10000
+
+
+5 - Add a DC with 3 more nodes , each of the nodes in a different rack, dc: south, racks south1, south2, south3
+
+
+[root@059b6addb818 /]# nodetool status
+Using /etc/scylla/scylla.yaml as the config file
+Datacenter: north
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.3  3.08 MB    256          ?       2096bf98-00dd-4e19-9da8-c0d4014b180f  north2
+UN  172.17.0.2  2.82 MB    256          ?       f76fe9d2-2ebb-43e9-bf1e-6f5d1851ece7  north1
+UN  172.17.0.4  3.16 MB    256          ?       736f7a74-5ffc-4535-b2a4-87240ed1d0af  north3
+
+
+Datacenter: south
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.5  2.91 MB    256          ?       9c35d74f-2ed7-411d-bdd5-138f07a84f6c  south1
+UN  172.17.0.7  1.78 MB    256          ?       33fca9f5-d373-46ca-9c65-6d49c5c40d4a  south3
+UN  172.17.0.6  1.74 MB    256          ?       4886f42d-6d74-4793-a1b1-23f805ec85fb  south2
+
+
+6 - Install Scylla Manager
+
+
+docker run -d --name scylla-manager-db --mount type=volume,source=scylla_manager_db_data,target=/var/lib/scylla scylladb/scylla --smp 1 --memory=1G
+
+docker run -d --name scylla-manager --link scylla-manager-db scylladb/scylla-manager:2.5.3
+
+
+docker exec -it scylla-manager sctool cluster add -c f76fe9d2-2ebb-43e9-bf1e-6f5d1851ece7 --host=172.17.0.2 --auth-token=j6MKDT6PrlfvB8KHFnrZM6viypPCmKJG75MZxub9DiZ5aVCD5TEvmkyrelqSMZ4unlcD2pR80K8sd55OzuvX7X5T53PGPTql4NA2tlMWkRmj4MTF9IaXdo8LUTNkYlhe
+e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+
+__  
+/  \     Cluster added! You can set it as default, by exporting its name or ID as env variable:
+@  @     $ export SCYLLA_MANAGER_CLUSTER=e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+|  |     $ export SCYLLA_MANAGER_CLUSTER=<name>
+|| |/    
+|| ||    Now run:
+|\_/|    $ sctool status -c e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+\___/    $ sctool task list -c e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+
+
+scylladb@gold-leader:~$ docker exec -it scylla-manager bash
+scylla@a1d71cfdc4b6:/$ sctool status
+Cluster:  (043b40cc-5c0e-42a5-8653-504ad758b7b1)
+Datacenter: north
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+|    | CQL      | REST     | Address    | Uptime    | CPUs | Memory   | Scylla   | Agent | Host ID                              |
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+| UN | UP (0ms) | UP (0ms) | 172.17.0.2 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.3 | f76fe9d2-2ebb-43e9-bf1e-6f5d1851ece7 |
+| UN | UP (0ms) | UP (0ms) | 172.17.0.3 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.3 | 2096bf98-00dd-4e19-9da8-c0d4014b180f |
+| UN | UP (1ms) | UP (0ms) | 172.17.0.4 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.3 | 736f7a74-5ffc-4535-b2a4-87240ed1d0af |
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+Datacenter: south
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+|    | CQL      | REST     | Address    | Uptime    | CPUs | Memory   | Scylla   | Agent | Host ID                              |
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+| UN | UP (0ms) | UP (0ms) | 172.17.0.5 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.4 | 9c35d74f-2ed7-411d-bdd5-138f07a84f6c |
+| UN | UP (0ms) | UP (0ms) | 172.17.0.6 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.4 | 4886f42d-6d74-4793-a1b1-23f805ec85fb |
+| UN | UP (0ms) | UP (0ms) | 172.17.0.7 | 82h41m24s | 8    | 31.20GiB | 2021.1.6 | 2.5.4 | 33fca9f5-d373-46ca-9c65-6d49c5c40d4a |
++----+----------+----------+------------+-----------+------+----------+----------+-------+--------------------------------------+
+
+
+7 - Run repair using Scylla manager
+
+
+scylladb@gold-leader:~$ docker exec scylla-manager sctool repair -c e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+repair/5267bc02-d9d5-44b6-8ea7-371b2aabf844
+
+
+scylla@a1d71cfdc4b6:/$ sctool repair -c '043b40cc-5c0e-42a5-8653-504ad758b7b1'
+repair/fb22480c-231e-41a7-b0c5-fc8262acc863
+
+
+scylladb@gold-leader:~$ docker exec scylla-manager sctool task progress repair/5267bc02-d9d5-44b6-8ea7-371b2aabf844 -c e2edb1fd-4c88-4c72-aa70-f082d638ff2a
+Status:		DONE
+Start time:	31 Dec 21 01:43:52 UTC
+End time:	31 Dec 21 01:46:59 UTC
+Duration:	3m6s
+Progress:	100%
+Datacenters:	
+  - north
+  - south
+
++--------------------+-----------------------------+----------+----------+
+| Keyspace           |                       Table | Progress | Duration |
++--------------------+-----------------------------+----------+----------+
+| keyspace1          |              customers_stcs | 100%     | 12s      |
+| keyspace1          |                timeline_lcs | 100%     | 11s      |
+| keyspace1          |          users_picture_twcs | 100%     | 10s      |
++--------------------+-----------------------------+----------+----------+
+| system_auth        |             role_attributes | 100%     | 8s       |
+| system_auth        |                role_members | 100%     | 8s       |
+| system_auth        |            role_permissions | 100%     | 10s      |
+| system_auth        |                       roles | 100%     | 9s       |
++--------------------+-----------------------------+----------+----------+
+| system_distributed | cdc_generation_descriptions | 100%     | 10s      |
+| system_distributed |   cdc_generation_timestamps | 100%     | 8s       |
+| system_distributed |    cdc_streams_descriptions | 100%     | 9s       |
+| system_distributed | cdc_streams_descriptions_v2 | 100%     | 10s      |
+| system_distributed |              service_levels | 100%     | 7s       |
+| system_distributed |           view_build_status | 100%     | 7s       |
++--------------------+-----------------------------+----------+----------+
+| system_traces      |                      events | 100%     | 4s       |
+| system_traces      |               node_slow_log | 100%     | 5s       |
+| system_traces      |      node_slow_log_time_idx | 100%     | 7s       |
+| system_traces      |                    sessions | 100%     | 2s       |
+| system_traces      |           sessions_time_idx | 100%     | 4s       |
++--------------------+-----------------------------+----------+----------+
+
+
+8 - Decommission the old DC, keeping only the new created DC
+
+
+sudo docker exec -it test1 nodetool decommission
+sudo docker exec -it test2 nodetool decommission
+sudo docker exec -it test3 nodetool decommission
+
+
+[root@03551e133967 /]# nodetool status
+Using /etc/scylla/scylla.yaml as the config file
+Datacenter: south
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.5  8.33 MB    256          ?       9c35d74f-2ed7-411d-bdd5-138f07a84f6c  south1
+UN  172.17.0.7  8.31 MB    256          ?       33fca9f5-d373-46ca-9c65-6d49c5c40d4a  south3
+UN  172.17.0.6  8.28 MB    256          ?       4886f42d-6d74-4793-a1b1-23f805ec85fb  south2
+
+
+9 - Add a node, decommission a node
+
+
+Add a node
+docker run --name other4 -d scylladb/scylla-enterprise:2021.1.6 --seeds="$(docker inspect --format='{{ .NetworkSettings.IPAddress }}' other1)"
+
+
+10 - Then kill one of the nodes, destroy one of the containers (kill the seed node)
+
+
+[root@c94f75e57b50 /]# nodetool status
+Using /etc/scylla/scylla.yaml as the config file
+Datacenter: south
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address      Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.5   8.34 MB    256          ?       9c35d74f-2ed7-411d-bdd5-138f07a84f6c  south1
+UN  172.17.0.7   ?          256          ?       33fca9f5-d373-46ca-9c65-6d49c5c40d4a  south3
+UN  172.17.0.6   8.3 MB     256          ?       4886f42d-6d74-4793-a1b1-23f805ec85fb  south2
+UN  172.17.0.10  5.08 MB    256          ?       4283e74f-e9c4-479d-ac8a-b69e853b7c40  south4
+
+
+Decommission a node
+
+
+[root@c94f75e57b50 /]# nodetool status
+Using /etc/scylla/scylla.yaml as the config file
+Datacenter: south
+=================
+Status=Up/Down
+|/ State=Normal/Leaving/Joining/Moving
+--  Address     Load       Tokens       Owns    Host ID                               Rack
+UN  172.17.0.5  7.54 MB    256          ?       9c35d74f-2ed7-411d-bdd5-138f07a84f6c  south1
+UN  172.17.0.7  8.59 MB    256          ?       33fca9f5-d373-46ca-9c65-6d49c5c40d4a  south3
+UN  172.17.0.6  7.8 MB     256          ?       4886f42d-6d74-4793-a1b1-23f805ec85fb  south2
+
+
+docker stop other1 
+
+docker rm other1
+
+
+##THE END##
